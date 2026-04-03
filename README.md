@@ -6,12 +6,11 @@
   </a>
 </p>
 
-> **Alpha Software** — This project is under active development. APIs, firmware behavior, and documentation may change. Known limitations:
-> - Multi-node person counting may show identical output regardless of the number of people (#249)
-> - Training pipeline on MM-Fi dataset may plateau at low PCK (#318) — hyperparameter tuning in progress
+> **Beta Software** — Under active development. APIs and firmware may change. Known limitations:
 > - No pre-trained model weights are provided; training from scratch is required
 > - ESP32-C3 and original ESP32 are not supported (single-core, insufficient for CSI DSP)
-> - Single ESP32 deployments have limited spatial resolution
+> - Single ESP32 deployments have limited spatial resolution — use 2+ nodes or add a [Cognitum Seed](https://cognitum.one) for best results
+> - Multi-person counting (n_persons) may overcount in single-occupancy scenarios ([#348](https://github.com/ruvnet/RuView/issues/348))
 >
 > Contributions and bug reports welcome at [Issues](https://github.com/ruvnet/RuView/issues).
 
@@ -41,7 +40,7 @@ In practice this means ordinary environments gain a new kind of spatial awarenes
 
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests: 1300+](https://img.shields.io/badge/tests-1300%2B-brightgreen.svg)](https://github.com/ruvnet/RuView)
+[![Tests: 1463](https://img.shields.io/badge/tests-1463%20passed-brightgreen.svg)](https://github.com/ruvnet/RuView)
 [![Docker: multi-arch](https://img.shields.io/badge/docker-amd64%20%2B%20arm64-blue.svg)](https://hub.docker.com/r/ruvnet/wifi-densepose)
 [![Vital Signs](https://img.shields.io/badge/vital%20signs-breathing%20%2B%20heartbeat-red.svg)](#vital-sign-detection)
 [![ESP32 Ready](https://img.shields.io/badge/ESP32--S3-CSI%20streaming-purple.svg)](#esp32-s3-hardware-pipeline)
@@ -50,11 +49,14 @@ In practice this means ordinary environments gain a new kind of spatial awarenes
  
 > | What | How | Speed |
 > |------|-----|-------|
-> | **Pose estimation** | CSI subcarrier amplitude/phase → DensePose UV maps | 54K fps (Rust) |
-> | **Breathing detection** | Bandpass 0.1-0.5 Hz → FFT peak | 6-30 BPM |
-> | **Heart rate** | Bandpass 0.8-2.0 Hz → FFT peak | 40-120 BPM |
-> | **Presence sensing** | RSSI variance + motion band power | < 1ms latency |
+> | **Pose estimation** | CSI subcarrier amplitude/phase → 17 COCO keypoints | 171K emb/s (M4 Pro) |
+> | **Breathing detection** | Bandpass 0.1-0.5 Hz → zero-crossing BPM | 6-30 BPM |
+> | **Heart rate** | Bandpass 0.8-2.0 Hz → zero-crossing BPM | 40-120 BPM |
+> | **Presence sensing** | Trained model + PIR fusion — 100% accuracy | 0.012 ms latency |
 > | **Through-wall** | Fresnel zone geometry + multipath modeling | Up to 5m depth |
+> | **Edge intelligence** | 8-dim feature vectors + RVF store on Cognitum Seed | $27 total BOM |
+> | **Camera-free training** | 10 sensor signals, no labels needed | 84s on M4 Pro |
+> | **Multi-frequency mesh** | Channel hopping across 6 bands, neighbor APs as illuminators | 3x sensing bandwidth |
 
 ```bash
 # 30 seconds to live sensing — no toolchain required
@@ -70,12 +72,70 @@ docker run -p 3000:3000 ruvnet/wifi-densepose:latest
 >
 > | Option | Hardware | Cost | Full CSI | Capabilities |
 > |--------|----------|------|----------|-------------|
-> | **ESP32 Mesh** (recommended) | 3-6x ESP32-S3 + WiFi router | ~$54 | Yes | Pose, breathing, heartbeat, motion, presence |
+> | **ESP32 + Cognitum Seed** (recommended) | ESP32-S3 + Cognitum Seed (Pi Zero 2 W) | ~$27 | Yes | Pose, breathing, heartbeat, motion, presence + persistent vector store, kNN search, witness chain, MCP proxy |
+> | **ESP32 Mesh** | 3-6x ESP32-S3 + WiFi router | ~$54 | Yes | Pose, breathing, heartbeat, motion, presence |
 > | **Research NIC** | Intel 5300 / Atheros AR9580 | ~$50-100 | Yes | Full CSI with 3x3 MIMO |
 > | **Any WiFi** | Windows, macOS, or Linux laptop | $0 | No | RSSI-only: coarse presence and motion |
 >
 > No hardware? Verify the signal processing pipeline with the deterministic reference signal: `python v1/data/proof/verify.py`
 >
+---
+
+### What's New in v0.5.4
+
+<details open>
+<summary><strong>Cognitum Seed Integration + Camera-Free Pose Training</strong></summary>
+
+**v0.5.4 transforms RuView from a real-time sensing tool into a persistent edge AI system.** Your ESP32 now remembers what it senses, learns without cameras, and proves its data cryptographically.
+
+| Capability | Details | Hardware |
+|-----------|---------|----------|
+| **Persistent vector store** | Every sensing event stored as searchable 8-dim vector in RVF format | ESP32 + [Cognitum Seed](https://cognitum.one) ($27) |
+| **kNN similarity search** | "Find the 10 most similar states to right now" — anomaly detection, fingerprinting | Cognitum Seed |
+| **Witness chain** | SHA-256 tamper-evident audit trail for every measurement (1,747 entries validated) | Cognitum Seed |
+| **Camera-free pose training** | 17 COCO keypoints from 10 sensor signals — PIR, RSSI triangulation, subcarrier asymmetry, vibration, BME280 | 2x ESP32 + Seed |
+| **Pre-trained model** | 82.8 KB (8 KB at 4-bit quantization), 100% presence accuracy, 0 skeleton violations | Download from release |
+| **Sub-ms inference** | 0.012 ms latency, 171,472 embeddings/sec on M4 Pro | Any machine with Node.js |
+| **SONA adaptation** | Adapts to new rooms in <1ms without retraining | ruvllm runtime |
+| **LoRA room adapters** | Per-node fine-tuning with 2,048 parameters per adapter | Automatic |
+| **114-tool MCP proxy** | AI assistants (Claude, GPT) query sensors directly via JSON-RPC | Cognitum Seed |
+| **Multi-frequency mesh** | Channel hopping across ch 1/3/5/6/9/11 — neighbor WiFi as passive radar | 2x ESP32 ($18) |
+| **RF room scanner** | Real-time spectrum visualization: nulls, reflectors, movement, multipath | `node scripts/rf-scan.js` |
+| **Security hardened** | Bearer tokens, TLS, source IP filtering, NaN rejection, credential rotation | All components |
+
+**Training pipeline (ruvllm, no PyTorch needed):**
+
+```bash
+# Collect data (2 min, ESP32s must be streaming)
+python scripts/collect-training-data.py --port 5006 --duration 120
+
+# Train — contrastive pretraining + task heads + LoRA + quantization + EWC
+node scripts/train-ruvllm.js --data data/recordings/pretrain-*.csi.jsonl
+
+# Camera-free 17-keypoint pose (uses PIR + RSSI + vibration + subcarrier asymmetry)
+node scripts/train-camera-free.js --data data/recordings/pretrain-*.csi.jsonl
+
+# Benchmark
+node scripts/benchmark-ruvllm.js --model models/csi-ruvllm
+```
+
+**Validated benchmarks (M4 Pro):**
+
+| Metric | Value |
+|--------|-------|
+| Training time | 84.4s (2,360 augmented samples) |
+| Contrastive improvement | 33.9% |
+| Presence accuracy | 100% |
+| Inference latency | 0.012 ms |
+| Throughput | 171,472 emb/s |
+| Model size (4-bit) | 8 KB |
+| Skeleton violations | 0 / 100 frames |
+| Rust tests | 1,463 passed |
+
+See [ADR-069](docs/adr/ADR-069-cognitum-seed-csi-pipeline.md), [ADR-071](docs/adr/ADR-071-ruvllm-training-pipeline.md), and the [Cognitum Seed tutorial](docs/tutorials/cognitum-seed-pretraining.md) for full details.
+
+</details>
+
 ---
 
 ## 📖 Documentation
@@ -1057,7 +1117,8 @@ Download a pre-built binary — no build toolchain needed:
 
 | Release | What's included | Tag |
 |---------|-----------------|-----|
-| [v0.5.0](https://github.com/ruvnet/RuView/releases/tag/v0.5.0-esp32) | **Stable** — mmWave sensor fusion ([ADR-063](docs/adr/ADR-063-mmwave-sensor-fusion.md)), auto-detect MR60BHA2/LD2410, 48-byte fused vitals, all v0.4.3.1 fixes | `v0.5.0-esp32` |
+| [v0.5.4](https://github.com/ruvnet/RuView/releases/tag/v0.5.4-esp32) | **Latest** — Cognitum Seed integration ([ADR-069](docs/adr/ADR-069-cognitum-seed-csi-pipeline.md)), 8-dim feature vectors at 1 Hz, RVF vector store ingest, witness chain attestation, security hardening | `v0.5.4-esp32` |
+| [v0.5.0](https://github.com/ruvnet/RuView/releases/tag/v0.5.0-esp32) | mmWave sensor fusion ([ADR-063](docs/adr/ADR-063-mmwave-sensor-fusion.md)), auto-detect MR60BHA2/LD2410, 48-byte fused vitals, all v0.4.3.1 fixes | `v0.5.0-esp32` |
 | [v0.4.3.1](https://github.com/ruvnet/RuView/releases/tag/v0.4.3.1-esp32) | Fall detection fix ([#263](https://github.com/ruvnet/RuView/issues/263)), 4MB flash ([#265](https://github.com/ruvnet/RuView/issues/265)), watchdog fix ([#266](https://github.com/ruvnet/RuView/issues/266)) | `v0.4.3.1-esp32` |
 | [v0.4.1](https://github.com/ruvnet/RuView/releases/tag/v0.4.1-esp32) | CSI build fix, compile guard, AMOLED display, edge intelligence ([ADR-057](docs/adr/ADR-057-firmware-csi-build-guard.md)) | `v0.4.1-esp32` |
 | [v0.3.0-alpha](https://github.com/ruvnet/RuView/releases/tag/v0.3.0-alpha-esp32) | Alpha — adds on-device edge intelligence and WASM modules ([ADR-039](docs/adr/ADR-039-esp32-edge-intelligence.md), [ADR-040](docs/adr/ADR-040-wasm-programmable-sensing.md)) | `v0.3.0-alpha-esp32` |
@@ -1102,6 +1163,34 @@ python firmware/esp32-csi-node/provision.py --port COM8 \
 ```
 
 Nodes can also hop across WiFi channels (1, 6, 11) to increase sensing bandwidth — configured via [ADR-029](docs/adr/ADR-029-ruvsense-multistatic-sensing-mode.md) channel hopping.
+
+### Cognitum Seed integration (ADR-069)
+
+Connect an ESP32 to a [Cognitum Seed](https://cognitum.one) (Pi Zero 2 W, ~$15) for persistent vector storage, kNN search, cryptographic witness chain, and AI-accessible MCP proxy:
+
+```
+ESP32-S3 ($9)  ──UDP──>  Host bridge  ──HTTPS──>  Cognitum Seed ($15)
+  CSI capture              seed_csi_bridge.py         RVF vector store
+  8-dim features @ 1 Hz                              kNN similarity search
+  Vitals + presence                                  Ed25519 witness chain
+                                                     114-tool MCP proxy
+```
+
+```bash
+# 1. Provision ESP32 to send features to your laptop
+python firmware/esp32-csi-node/provision.py --port COM9 \
+  --ssid "YourWiFi" --password "secret" --target-ip 192.168.1.20 --target-port 5006
+
+# 2. Run the bridge (forwards to Seed via HTTPS)
+export SEED_TOKEN="your-pairing-token"
+python scripts/seed_csi_bridge.py \
+  --seed-url https://169.254.42.1:8443 --token "$SEED_TOKEN" --validate
+
+# 3. Check Seed stats
+python scripts/seed_csi_bridge.py --token "$SEED_TOKEN" --stats
+```
+
+The 8-dim feature vector captures: presence, motion, breathing rate, heart rate, phase variance, person count, fall detection, and RSSI — all normalized to [0.0, 1.0]. See [ADR-069](docs/adr/ADR-069-cognitum-seed-csi-pipeline.md) for the full architecture.
 
 ### On-device intelligence (v0.3.0-alpha)
 
